@@ -3,13 +3,22 @@ import pandas as pd
 from supabase import create_client
 from datetime import datetime
 
-# ================= CONFIG =================
 st.set_page_config(page_title="LKPM System", layout="wide")
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# ================= SAFE CONFIG (ANTI ERROR) =================
+SUPABASE_URL = ""
+SUPABASE_KEY = ""
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+if "SUPABASE_URL" in st.secrets:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+
+if "SUPABASE_KEY" in st.secrets:
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
+supabase = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ================= LOGIN =================
 if "login" not in st.session_state:
@@ -17,12 +26,16 @@ if "login" not in st.session_state:
 
 if not st.session_state.login:
 
-    st.title("🔐 LKPM Login")
+    st.title("🔐 Login LKPM")
 
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
+
+        if supabase is None:
+            st.error("Supabase belum dikonfigurasi")
+            st.stop()
 
         res = supabase.table("users") \
             .select("*") \
@@ -43,13 +56,13 @@ if not st.session_state.login:
 user = st.session_state.user
 role = user["role"]
 
-st.sidebar.title("Menu")
-
-menu_list = ["Dashboard", "Data", "Import"]
-menu = st.sidebar.radio("Navigation", menu_list)
+menu = st.sidebar.radio("Menu", ["Dashboard", "Data", "Import"])
 
 # ================= LOAD DATA =================
 def load_data():
+    if supabase is None:
+        return pd.DataFrame()
+
     data = supabase.table("lkpm").select("*").execute().data
     df = pd.DataFrame(data)
 
@@ -66,7 +79,7 @@ if menu == "Dashboard":
     st.title("🏛️ Dashboard LKPM")
 
     if df.empty:
-        st.warning("Belum ada data")
+        st.warning("Belum ada data / Supabase belum aktif")
     else:
         c1, c2, c3 = st.columns(3)
 
@@ -82,10 +95,6 @@ elif menu == "Data":
     st.title("📊 Data Perusahaan")
 
     st.dataframe(df, use_container_width=True)
-
-    if not df.empty:
-        df["wa_link"] = "https://wa.me/" + df["wa"].astype(str)
-        st.write("WA Link sudah tersedia di data")
 
 # ================= IMPORT =================
 elif menu == "Import":
@@ -106,7 +115,11 @@ elif menu == "Import":
         stat = st.selectbox("Status", cols)
         wa = st.selectbox("WA", cols)
 
-        if st.button("Simpan Data"):
+        if st.button("Simpan"):
+
+            if supabase is None:
+                st.error("Supabase belum dikonfigurasi")
+                st.stop()
 
             sukses = 0
             dup = 0
