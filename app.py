@@ -1,168 +1,202 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import folium
-from streamlit_folium import st_folium
-import urllib.parse
+from datetime import datetime
 from fpdf import FPDF
 
-# ================= CONFIG =================
-st.set_page_config(page_title="SIMPEL LKPM", layout="wide")
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(page_title="Dashboard LKPM PRO", layout="wide")
 
-# ================= DATA =================
-@st.cache_data
-def load_data():
-    return pd.DataFrame({
-        "Nama":["PT Maju","CV Digital","PT Sejahtera","PT Properti","CV Logistik"],
-        "NIB":["001","002","003","004","005"],
-        "Kecamatan":["Menteng","Senen","Tanah Abang","Kemayoran","Gambir"],
-        "Status":["✅ Sudah","❌ Belum","✅ Sudah","❌ Belum","❌ Belum"],
-        "Frekuensi":[3,0,2,0,1],
-        "Lat":[-6.18,-6.17,-6.16,-6.19,-6.18],
-        "Lng":[106.84,106.85,106.83,106.82,106.84],
-        "Periode":["Jan","Feb","Mar","Apr","Mei"]
-    })
-
-df = load_data()
-
-# ================= LOGIN =================
+# =========================
+# LOGIN
+# =========================
 users = {
-    "admin": {"password": "admin123", "role": "admin"},
-    "staff": {"password": "123", "role": "staff"}
+    "admin": "12345",
+    "user": "12345"
 }
 
 if "login" not in st.session_state:
     st.session_state.login = False
-if "user" not in st.session_state:
-    st.session_state.user = ""
-if "role" not in st.session_state:
-    st.session_state.role = ""
 
-# ================= LOGIN PAGE =================
 if not st.session_state.login:
-    st.title("🏛️ SIMPEL LKPM")
-
+    st.title("🔐 Login Dashboard")
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u in users and p == users[u]["password"]:
+        if u in users and users[u] == p:
             st.session_state.login = True
-            st.session_state.user = u
-            st.session_state.role = users[u]["role"]
             st.rerun()
         else:
             st.error("Username / Password salah")
+    st.stop()
 
-# ================= DASHBOARD =================
-else:
-    st.markdown("## 📊 Dashboard Monitoring LKPM")
+# =========================
+# HEADER
+# =========================
+st.title("📊 Dashboard Monitoring LKPM PRO")
+st.caption("Versi Instansi + PIC Wilayah")
 
-    # SIDEBAR
-    with st.sidebar:
-        st.success(f"Login: {st.session_state.user}")
-        st.write(f"Role: {st.session_state.role}")
+# =========================
+# UPLOAD DATA
+# =========================
+file = st.sidebar.file_uploader("Upload Data OSS / LKPM", type=["xlsx"])
 
-        if st.button("Logout"):
-            st.session_state.login = False
-            st.rerun()
+if not file:
+    st.warning("Upload file dulu")
+    st.stop()
 
-        kec = st.multiselect("Kecamatan", df.Kecamatan.unique(), default=df.Kecamatan.unique())
-        stat = st.multiselect("Status", df.Status.unique(), default=df.Status.unique())
+df = pd.read_excel(file)
 
-    f = df[(df.Kecamatan.isin(kec)) & (df.Status.isin(stat))]
+# =========================
+# CLEANING
+# =========================
+df = df.rename(columns={
+    "real NIB": "NIB",
+    "nama_perusahaan": "Nama",
+    "kecamatan_usaha": "Kecamatan"
+})
 
-    # KPI
-    total = len(f)
-    sudah = len(f[f.Status.str.contains("Sudah")])
-    belum = len(f[f.Status.str.contains("Belum")])
-    persen = (sudah / total * 100) if total > 0 else 0
+df = df[["NIB", "Nama", "Kecamatan"]]
+df = df.drop_duplicates(subset="NIB")
+df = df.fillna("")
 
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Total Data", total)
-    c2.metric("Sudah Lapor", sudah)
-    c3.metric("Belum Lapor", belum)
-    c4.metric("Kepatuhan", f"{persen:.1f}%")
+# =========================
+# STATUS LKPM
+# =========================
+df["Frekuensi"] = 1
+df["Status"] = df["Frekuensi"].apply(lambda x: "Sudah" if x > 0 else "Belum")
 
-    st.divider()
+# =========================
+# PIC PER KECAMATAN
+# =========================
+pic_map = {
+    "Tanah Abang": {"PIC": "Budi", "WA": "08123456789"},
+    "Menteng": {"PIC": "Sari", "WA": "08234567890"},
+    "Gambir": {"PIC": "Andi", "WA": "08345678901"}
+}
 
-    # CHART
-    col1, col2 = st.columns(2)
+def get_pic(kec):
+    return pic_map.get(kec, {}).get("PIC", "-")
 
-    with col1:
-        if not f.empty:
-            fig = px.pie(f, names='Status', hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
+def get_wa(kec):
+    return pic_map.get(kec, {}).get("WA", "-")
 
-            bar = f.groupby('Kecamatan').size().reset_index(name='Jumlah')
-            fig2 = px.bar(bar, x='Kecamatan', y='Jumlah')
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("Tidak ada data")
+df["PIC"] = df["Kecamatan"].apply(get_pic)
+df["WA"] = df["Kecamatan"].apply(get_wa)
 
-    with col2:
-        if not f.empty:
-            hist = px.histogram(f, x='Frekuensi', color='Status')
-            st.plotly_chart(hist, use_container_width=True)
+# =========================
+# LINK WHATSAPP
+# =========================
+def wa_link(nomor, nama):
+    if nomor == "-" or nomor == "":
+        return ""
+    nomor = nomor.replace("0", "62", 1)
+    return f"https://wa.me/{nomor}?text=Halo%20{nama}%20terkait%20LKPM"
 
-            trend = f.groupby('Periode').size().reset_index(name='Jumlah')
-            fig3 = px.line(trend, x='Periode', y='Jumlah', markers=True)
-            st.plotly_chart(fig3, use_container_width=True)
+df["Chat"] = df.apply(lambda x: wa_link(x["WA"], x["Nama"]), axis=1)
 
-    st.divider()
+# =========================
+# KPI
+# =========================
+st.subheader("📌 Ringkasan")
 
-    # TABLE
-    st.subheader("📋 Data Perusahaan")
-    st.dataframe(f, use_container_width=True)
+col1, col2, col3 = st.columns(3)
 
-    # DOWNLOAD CSV
-    csv = f.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download CSV", csv, "lkpm.csv")
+total = len(df)
+sudah = len(df[df["Status"] == "Sudah"])
+belum = len(df[df["Status"] == "Belum"])
 
-    # PDF
-    def make_pdf(data):
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=10)
+col1.metric("Total Perusahaan", total)
+col2.metric("Sudah Lapor", sudah)
+col3.metric("Belum Lapor", belum)
 
-        for _, r in data.iterrows():
-            pdf.cell(200, 8, txt=f"{r['Nama']} - {r['Status']}", ln=True)
+# =========================
+# FILTER
+# =========================
+kecamatan = st.multiselect(
+    "Filter Kecamatan",
+    df["Kecamatan"].unique(),
+    default=df["Kecamatan"].unique()
+)
 
-        pdf.output("laporan.pdf")
+df = df[df["Kecamatan"].isin(kecamatan)]
 
-    if st.button("📄 Export PDF"):
-        make_pdf(f)
-        with open("laporan.pdf", "rb") as file:
-            st.download_button("Download PDF", file, "laporan.pdf")
+# =========================
+# GRAFIK
+# =========================
+st.subheader("📊 Ranking Kecamatan")
 
-    st.divider()
+rank = df["Kecamatan"].value_counts().reset_index()
+rank.columns = ["Kecamatan", "Jumlah"]
 
-    # WA FOLLOW UP
-    st.subheader("📲 Follow Up WhatsApp")
+fig = px.bar(rank, x="Kecamatan", y="Jumlah")
+st.plotly_chart(fig, use_container_width=True)
 
-    for _, r in f.iterrows():
-        if "Belum" in r.Status:
-            msg = f"Halo {r.Nama}, mohon segera melakukan pelaporan LKPM."
-            link = "https://wa.me/?text=" + urllib.parse.quote(msg)
-            st.link_button(f"Kirim WA ke {r.Nama}", link)
+# =========================
+# MAP
+# =========================
+df["Lat"] = -6.17
+df["Lng"] = 106.83
+st.subheader("🗺️ Peta")
+st.map(df[["Lat", "Lng"]])
 
-    st.divider()
+# =========================
+# TABEL
+# =========================
+st.subheader("📋 Data Perusahaan")
 
-    # MAP
-    st.subheader("🗺️ Peta Sebaran")
+st.dataframe(df[["Nama", "Kecamatan", "Status", "PIC", "WA"]], use_container_width=True)
 
-    if not f.empty:
-        m = folium.Map(location=[-6.18,106.84], zoom_start=12)
+# =========================
+# KONTAK WA
+# =========================
+st.subheader("📲 Kontak PIC")
 
-        for _, r in f.iterrows():
-            color = "green" if r.Frekuensi > 1 else "red"
+for i, row in df.iterrows():
+    if row["Chat"]:
+        st.markdown(f"""
+        **{row['Nama']}** - {row['Kecamatan']}  
+        PIC: {row['PIC']}  
+        📲 [Chat WhatsApp]({row['Chat']})
+        """)
 
-            folium.Marker(
-                [r.Lat, r.Lng],
-                popup=f"{r.Nama} - {r.Status}",
-                icon=folium.Icon(color=color)
-            ).add_to(m)
+# =========================
+# EXPORT CSV
+# =========================
+csv = df.to_csv(index=False).encode("utf-8")
 
-        st_folium(m, width=1000, height=500)
-    else:
-        st.warning("Tidak ada data peta")
+st.download_button(
+    "⬇️ Download CSV",
+    data=csv,
+    file_name="lkpm.csv",
+    mime="text/csv"
+)
+
+# =========================
+# EXPORT PDF (NO ERROR)
+# =========================
+def clean_text(text):
+    return str(text).encode('latin-1', 'replace').decode('latin-1')
+
+def make_pdf(data):
+    pdf = FPDF()
+    pdf.add_page()
+
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "LAPORAN LKPM", 0, 1, "C")
+
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 10, f"Tanggal: {datetime.now()}", 0, 1)
+
+    for i, row in data.iterrows():
+        pdf.cell(0, 8, clean_text(row["Nama"]), 0, 1)
+
+    pdf.output("laporan.pdf")
+
+if st.button("📄 Export PDF"):
+    make_pdf(df)
+    with open("laporan.pdf", "rb") as f:
+        st.download_button("Download PDF", f, file_name="laporan.pdf")
