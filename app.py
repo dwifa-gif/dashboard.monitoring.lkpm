@@ -1,202 +1,141 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from supabase import create_client
 from datetime import datetime
-from fpdf import FPDF
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(page_title="Dashboard LKPM PRO", layout="wide")
+# ================= CONFIG =================
+st.set_page_config(page_title="LKPM System", layout="wide")
 
-# =========================
-# LOGIN
-# =========================
-users = {
-    "admin": "12345",
-    "user": "12345"
-}
+SUPABASE_URL = "ISI_URL_KAMU"
+SUPABASE_KEY = "ISI_KEY_KAMU"
 
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ================= LOGIN =================
 if "login" not in st.session_state:
     st.session_state.login = False
 
 if not st.session_state.login:
-    st.title("🔐 Login Dashboard")
+    st.title("🔐 Login LKPM")
+
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u in users and users[u] == p:
+        res = supabase.table("users").select("*").eq("username", u).eq("password", p).execute()
+
+        if res.data:
             st.session_state.login = True
+            st.session_state.user = res.data[0]
             st.rerun()
         else:
-            st.error("Username / Password salah")
+            st.error("Login gagal")
+
     st.stop()
 
-# =========================
-# HEADER
-# =========================
-st.title("📊 Dashboard Monitoring LKPM PRO")
-st.caption("Versi Instansi + PIC Wilayah")
+# ================= MENU =================
+menu = st.sidebar.radio("Menu", ["Dashboard", "Data", "Import", "Log"])
 
-# =========================
-# UPLOAD DATA
-# =========================
-file = st.sidebar.file_uploader("Upload Data OSS / LKPM", type=["xlsx"])
+# ================= LOAD DATA =================
+def load_data():
+    data = supabase.table("lkpm").select("*").execute()
+    return pd.DataFrame(data.data)
 
-if not file:
-    st.warning("Upload file dulu")
-    st.stop()
+df = load_data()
 
-df = pd.read_excel(file)
+# ================= DASHBOARD =================
+if menu == "Dashboard":
 
-# =========================
-# CLEANING
-# =========================
-df = df.rename(columns={
-    "real NIB": "NIB",
-    "nama_perusahaan": "Nama",
-    "kecamatan_usaha": "Kecamatan"
-})
+    st.title("🏛️ Dashboard LKPM")
 
-df = df[["NIB", "Nama", "Kecamatan"]]
-df = df.drop_duplicates(subset="NIB")
-df = df.fillna("")
+    if df.empty:
+        st.warning("Belum ada data")
+    else:
+        total = len(df)
+        sudah = len(df[df["status"] == "Sudah"])
+        belum = len(df[df["status"] == "Belum"])
 
-# =========================
-# STATUS LKPM
-# =========================
-df["Frekuensi"] = 1
-df["Status"] = df["Frekuensi"].apply(lambda x: "Sudah" if x > 0 else "Belum")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total", total)
+        c2.metric("Sudah", sudah)
+        c3.metric("Belum", belum)
 
-# =========================
-# PIC PER KECAMATAN
-# =========================
-pic_map = {
-    "Tanah Abang": {"PIC": "Budi", "WA": "08123456789"},
-    "Menteng": {"PIC": "Sari", "WA": "08234567890"},
-    "Gambir": {"PIC": "Andi", "WA": "08345678901"}
-}
+        chart = df.groupby("kecamatan").size().reset_index(name="jumlah")
+        fig = px.bar(chart, x="kecamatan", y="jumlah")
+        st.plotly_chart(fig, use_container_width=True)
 
-def get_pic(kec):
-    return pic_map.get(kec, {}).get("PIC", "-")
+# ================= DATA =================
+elif menu == "Data":
 
-def get_wa(kec):
-    return pic_map.get(kec, {}).get("WA", "-")
+    st.subheader("Data Perusahaan")
 
-df["PIC"] = df["Kecamatan"].apply(get_pic)
-df["WA"] = df["Kecamatan"].apply(get_wa)
+    if not df.empty:
+        df["wa_link"] = "https://wa.me/" + df["wa"].astype(str)
+        st.dataframe(df)
+    else:
+        st.info("Data kosong")
 
-# =========================
-# LINK WHATSAPP
-# =========================
-def wa_link(nomor, nama):
-    if nomor == "-" or nomor == "":
-        return ""
-    nomor = nomor.replace("0", "62", 1)
-    return f"https://wa.me/{nomor}?text=Halo%20{nama}%20terkait%20LKPM"
+# ================= IMPORT =================
+elif menu == "Import":
 
-df["Chat"] = df.apply(lambda x: wa_link(x["WA"], x["Nama"]), axis=1)
+    st.subheader("Import Excel")
 
-# =========================
-# KPI
-# =========================
-st.subheader("📌 Ringkasan")
+    file = st.file_uploader("Upload Excel", type=["xlsx"])
 
-col1, col2, col3 = st.columns(3)
+    if file:
 
-total = len(df)
-sudah = len(df[df["Status"] == "Sudah"])
-belum = len(df[df["Status"] == "Belum"])
+        df_import = pd.read_excel(file)
+        st.dataframe(df_import)
 
-col1.metric("Total Perusahaan", total)
-col2.metric("Sudah Lapor", sudah)
-col3.metric("Belum Lapor", belum)
+        cols = df_import.columns.tolist()
 
-# =========================
-# FILTER
-# =========================
-kecamatan = st.multiselect(
-    "Filter Kecamatan",
-    df["Kecamatan"].unique(),
-    default=df["Kecamatan"].unique()
-)
+        nama = st.selectbox("Nama", cols)
+        kec = st.selectbox("Kecamatan", cols)
+        stat = st.selectbox("Status", cols)
+        wa = st.selectbox("WA", cols)
 
-df = df[df["Kecamatan"].isin(kecamatan)]
+        if st.button("Import Data"):
 
-# =========================
-# GRAFIK
-# =========================
-st.subheader("📊 Ranking Kecamatan")
+            sukses = 0
+            dup = 0
 
-rank = df["Kecamatan"].value_counts().reset_index()
-rank.columns = ["Kecamatan", "Jumlah"]
+            for _, row in df_import.iterrows():
 
-fig = px.bar(rank, x="Kecamatan", y="Jumlah")
-st.plotly_chart(fig, use_container_width=True)
+                cek = supabase.table("lkpm").select("nama").eq("nama", row[nama]).execute()
 
-# =========================
-# MAP
-# =========================
-df["Lat"] = -6.17
-df["Lng"] = 106.83
-st.subheader("🗺️ Peta")
-st.map(df[["Lat", "Lng"]])
+                if cek.data:
+                    dup += 1
+                    continue
 
-# =========================
-# TABEL
-# =========================
-st.subheader("📋 Data Perusahaan")
+                supabase.table("lkpm").insert({
+                    "nama": row[nama],
+                    "kecamatan": row[kec],
+                    "status": row[stat],
+                    "pic": "",
+                    "wa": str(row[wa])
+                }).execute()
 
-st.dataframe(df[["Nama", "Kecamatan", "Status", "PIC", "WA"]], use_container_width=True)
+                sukses += 1
 
-# =========================
-# KONTAK WA
-# =========================
-st.subheader("📲 Kontak PIC")
+            supabase.table("log_import").insert({
+                "user": st.session_state.user["username"],
+                "tanggal": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "total": len(df_import),
+                "berhasil": sukses,
+                "duplikat": dup
+            }).execute()
 
-for i, row in df.iterrows():
-    if row["Chat"]:
-        st.markdown(f"""
-        **{row['Nama']}** - {row['Kecamatan']}  
-        PIC: {row['PIC']}  
-        📲 [Chat WhatsApp]({row['Chat']})
-        """)
+            st.success(f"Import selesai ✔ Berhasil: {sukses} | Duplikat: {dup}")
 
-# =========================
-# EXPORT CSV
-# =========================
-csv = df.to_csv(index=False).encode("utf-8")
+# ================= LOG =================
+elif menu == "Log":
 
-st.download_button(
-    "⬇️ Download CSV",
-    data=csv,
-    file_name="lkpm.csv",
-    mime="text/csv"
-)
+    st.subheader("Log Import")
 
-# =========================
-# EXPORT PDF (NO ERROR)
-# =========================
-def clean_text(text):
-    return str(text).encode('latin-1', 'replace').decode('latin-1')
+    log = supabase.table("log_import").select("*").execute()
 
-def make_pdf(data):
-    pdf = FPDF()
-    pdf.add_page()
-
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "LAPORAN LKPM", 0, 1, "C")
-
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 10, f"Tanggal: {datetime.now()}", 0, 1)
-
-    for i, row in data.iterrows():
-        pdf.cell(0, 8, clean_text(row["Nama"]), 0, 1)
-
-    pdf.output("laporan.pdf")
-
-if st.button("📄 Export PDF"):
-    make_pdf(df)
-    with open("laporan.pdf", "rb") as f:
-        st.download_button("Download PDF", f, file_name="laporan.pdf")
+    if log.data:
+        st.dataframe(pd.DataFrame(log.data))
+    else:
+        st.info("Belum ada log")
